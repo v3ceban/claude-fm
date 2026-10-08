@@ -16,7 +16,7 @@ import (
 	"github.com/v3ceban/claude-fm/internal/pipeline"
 	"github.com/v3ceban/claude-fm/internal/render"
 	"github.com/v3ceban/claude-fm/internal/stream"
-	"github.com/v3ceban/claude-fm/internal/term"
+	"github.com/v3ceban/claude-fm/internal/tty"
 )
 
 const streamURL = "https://clau.de/radio"
@@ -27,14 +27,14 @@ type source struct{ w, h, quality int }
 
 var sources = []source{{1280, 720, 720}, {854, 480, 480}, {640, 360, 480}, {426, 240, 240}}
 
-type App struct {
+type app struct {
 	input  string
 	volume int
 	fps    float64
 	log    *log.Logger
 
-	tty        *term.Terminal
-	gfx        term.Graphics
+	tty        *tty.Terminal
+	gfx        tty.Graphics
 	cols, rows int
 	src        source
 
@@ -43,12 +43,12 @@ type App struct {
 	imgY    int
 	imgCols int
 	imgRows int
-	panes   *term.PaneWatcher
-	pane    term.PaneState
+	panes   *tty.PaneWatcher
+	pane    tty.PaneState
 	shown   bool
 	cleared bool
 	status  string
-	img     term.ImageWriter
+	img     tty.ImageWriter
 
 	quit    bool
 	frames  int
@@ -58,7 +58,7 @@ type App struct {
 }
 
 func main() {
-	a := &App{}
+	a := &app{}
 	flag.StringVar(&a.input, "input", "", "play a local file or direct media URL instead of Claude FM")
 	flag.IntVar(&a.volume, "volume", 100, "volume 0-130")
 	flag.Float64Var(&a.fps, "fps", 30, "max frames per second to draw")
@@ -74,7 +74,7 @@ func main() {
 			a.log = log.New(f, "", log.Ltime|log.Lmicroseconds)
 		}
 	}
-	t, err := term.Open(a.log.Printf)
+	t, err := tty.Open(a.log.Printf)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "need a terminal:", err)
 		os.Exit(1)
@@ -94,10 +94,10 @@ func main() {
 	defer func() {
 		a.deleteImages()
 		t.Restore()
-		term.RefreshClient()
+		tty.RefreshClient()
 	}()
-	defer term.EnableFocusEvents()()
-	a.panes = term.WatchPane(200 * time.Millisecond)
+	defer tty.EnableFocusEvents()()
+	a.panes = tty.WatchPane(200 * time.Millisecond)
 	defer a.panes.Stop()
 	a.cols, a.rows = t.Size()
 	a.pane = a.panes.Get()
@@ -107,7 +107,7 @@ func main() {
 	a.run()
 }
 
-func (a *App) fitImage() {
+func (a *app) fitImage() {
 	rows := a.rows
 	if a.pane.LastRow {
 		rows--
@@ -124,7 +124,7 @@ func (a *App) fitImage() {
 	a.imgX, a.imgY = (a.cols-a.imgCols)/2, (rows-a.imgRows)/2
 }
 
-func (a *App) chooseSource() source {
+func (a *app) chooseSource() source {
 	a.fitImage()
 	pw, ph := a.imgCols*a.gfx.CellW, a.imgRows*a.gfx.CellH
 	for _, s := range sources {
@@ -135,19 +135,19 @@ func (a *App) chooseSource() source {
 	return sources[len(sources)-1]
 }
 
-func (a *App) setSource(s source) {
+func (a *app) setSource(s source) {
 	a.src = s
 	a.png = render.NewPNGFrame(s.w, s.h)
 }
 
-func (a *App) relayout() {
+func (a *app) relayout() {
 	a.fitImage()
 	a.redraw()
 }
 
-func (a *App) write(s string) { os.Stdout.WriteString(s) }
+func (a *app) write(s string) { os.Stdout.WriteString(s) }
 
-func (a *App) redraw() {
+func (a *app) redraw() {
 	a.write(clearScreen)
 	a.cleared = false
 	if a.status != "" {
@@ -156,12 +156,12 @@ func (a *App) redraw() {
 	}
 }
 
-func (a *App) message(msg string) {
+func (a *app) message(msg string) {
 	a.status = msg
 	a.redraw()
 }
 
-func (a *App) clearOnce() {
+func (a *app) clearOnce() {
 	if !a.cleared {
 		a.cleared = true
 		a.status = ""
@@ -169,16 +169,16 @@ func (a *App) clearOnce() {
 	}
 }
 
-func (a *App) hideImage() {
+func (a *app) hideImage() {
 	if a.shown {
 		a.shown = false
 		a.deleteImages()
 	}
 }
 
-func (a *App) deleteImages() { os.Stdout.Write(term.DeleteImages()) }
+func (a *app) deleteImages() { os.Stdout.Write(tty.DeleteImages()) }
 
-func (a *App) run() {
+func (a *app) run() {
 	backoff := time.Second
 	retry := func(msg string) (quit bool) {
 		a.message(msg)
@@ -249,13 +249,13 @@ func shortErr(err error) string {
 	return string(s)
 }
 
-func (a *App) onResize() {
+func (a *app) onResize() {
 	a.cols, a.rows = a.tty.Size()
 	a.pane = a.panes.Refresh()
 	a.relayout()
 }
 
-func (a *App) growSource() bool {
+func (a *app) growSource() bool {
 	if s := a.chooseSource(); s.w > a.src.w || s.h > a.src.h {
 		a.setSource(s)
 		return true
@@ -263,7 +263,7 @@ func (a *App) growSource() bool {
 	return false
 }
 
-func (a *App) wait(d time.Duration) bool {
+func (a *app) wait(d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()
 	for {
@@ -281,7 +281,7 @@ func (a *App) wait(d time.Duration) bool {
 	}
 }
 
-func (a *App) resolve() ([]string, error) {
+func (a *app) resolve() ([]string, error) {
 	type res struct {
 		urls []string
 		err  error
@@ -310,7 +310,7 @@ func (a *App) resolve() ([]string, error) {
 	}
 }
 
-func (a *App) present(s *pipeline.Session) bool {
+func (a *app) present(s *pipeline.Session) bool {
 	timer := time.NewTimer(50 * time.Millisecond)
 	defer timer.Stop()
 	shownFirst := false
@@ -376,7 +376,7 @@ func (a *App) present(s *pipeline.Session) bool {
 	}
 }
 
-func (a *App) draw(f *pipeline.Frame) {
+func (a *app) draw(f *pipeline.Frame) {
 	t := time.Now()
 	a.pane = a.panes.Get()
 	if !a.pane.Visible {

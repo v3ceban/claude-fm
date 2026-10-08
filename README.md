@@ -139,7 +139,7 @@ main.go                CLI and presentation loop
 internal/render/       adaptive quantizer and PNG frame encoder
 internal/pipeline/     ffmpeg + mpv session, frame/audio queues, A/V clock
 internal/stream/       yt-dlp resolution
-internal/term/         raw mode, graphics probe, tmux integration, kitty output, quit key
+internal/tty/          raw mode, graphics probe, tmux integration, kitty output, quit key
 ```
 
 ## Development

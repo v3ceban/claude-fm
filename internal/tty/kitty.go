@@ -1,4 +1,4 @@
-package term
+package tty
 
 import (
 	"encoding/base64"

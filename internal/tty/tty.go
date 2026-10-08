@@ -1,5 +1,5 @@
-// Package term handles raw terminal mode, tmux integration and key input.
-package term
+// Package tty handles raw terminal mode, tmux integration and key input.
+package tty
 
 import (
 	"bytes"
