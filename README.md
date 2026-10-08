@@ -1,10 +1,9 @@
 # claude-fm
 
-Watch and listen to **Claude FM** (the lo-fi stream behind Claude Code's `/radio`
-command) inside a terminal pane, directly or in tmux. The video is drawn as real
-pixels, the audio plays through mpv, and the picture follows the pane through
-splits, zooms, window switches and resizes. Press `q` to quit. That is the
-whole UI.
+Watch and listen to **Claude FM**, the lo-fi stream behind Claude Code's
+`/radio` command, in a terminal pane. The video is drawn as real pixels, the
+audio plays through mpv, and the picture follows the pane through tmux splits,
+zooms, window switches and resizes. Press `q` to quit; that is the whole UI.
 
 ![claude-fm playing Claude FM in a tmux pane next to Neovim and Claude Code](docs/screenshot.png)
 
@@ -18,32 +17,29 @@ whole UI.
 | ffmpeg   | decode video and audio                                                  | `brew install ffmpeg` |
 | mpv      | audio output and the playback clock                                     | `brew install mpv`    |
 
-macOS and Linux; on Linux install the three media tools with your package
-manager. Graphics support is detected at start-up by sending the kitty graphics
-query (wrapped in a tmux passthrough when needed) and waiting up to two seconds
-for the terminal's answer, so there is no allow-list of terminal names.
+Runs on macOS and Linux (on Linux, install the media tools with your package
+manager). Graphics support is detected at start-up by querying the terminal,
+not by matching its name, so any terminal that answers the kitty graphics query
+works.
 
-tmux is optional. Inside tmux the app enables `allow-passthrough` for its own
-pane and `focus-events` for the server (restored on exit if it was off).
+tmux is optional. Inside tmux, claude-fm enables `allow-passthrough` for its
+own pane and turns on `focus-events` for the server, switching it back off on
+exit if it was off before.
 
-## Install and Update
-
-With a Go toolchain, straight from GitHub:
+## Install
 
 ```sh
 go install github.com/v3ceban/claude-fm@latest
 claude-fm
 ```
 
-The binary lands in `$(go env GOBIN)` or `$(go env GOPATH)/bin`, which is
-usually `~/go/bin`; make sure that is on your `PATH`.
-
-To update, run the same command again; `@latest` fetches the newest commit
-(or tag) and overwrites the binary. To uninstall, delete the binary:
+The binary goes to `$(go env GOBIN)` or `$(go env GOPATH)/bin` (usually
+`~/go/bin`), which needs to be on your `PATH`. Run the same command again to
+update. To uninstall:
 
 ```sh
-rm "$(go env GOPATH)/bin/claude-fm"      # or $(go env GOBIN)/claude-fm if GOBIN is set
-go clean -modcache                       # optional: drops the downloaded sources for every module
+rm "$(go env GOPATH)/bin/claude-fm"   # or $(go env GOBIN)/claude-fm if GOBIN is set
+go clean -modcache                    # optional: removes downloaded sources for all modules
 ```
 
 From a checkout:
@@ -52,20 +48,35 @@ From a checkout:
 git clone https://github.com/v3ceban/claude-fm.git
 cd claude-fm
 make build        # or: go build -o claude-fm .
-./claude-fm
-make install      # builds and copies the binary to ~/.local/bin (override with PREFIX=/usr/local)
-make uninstall    # removes the binary (same PREFIX)
+make install      # copies the binary to ~/.local/bin (override with PREFIX=/usr/local)
+make uninstall    # removes it (same PREFIX)
 ```
 
-Flags (all optional):
+## Usage
 
 ```
+claude-fm [flags]
+
 -volume 100     volume 0-130
 -fps 30         max frames per second to draw
 -cell-px WxH    terminal cell size in pixels, if detection is wrong
--input FILE     play a local file / direct URL instead of Claude FM
+-input FILE     play a local file or direct URL instead of Claude FM
 -log FILE       write a debug log
 ```
+
+## Other terminal players
+
+| Project                                                         | Shows                                   | Controls                      | Needs                                    |
+| --------------------------------------------------------------- | --------------------------------------- | ----------------------------- | ---------------------------------------- |
+| claude-fm (this repo)                                           | the stream's video                      | `q` to quit, `-volume` flag   | Go, yt-dlp, ffmpeg, mpv; kitty graphics  |
+| [GithubAnant/claudefm](https://github.com/GithubAnant/claudefm) | a text dashboard                        | pause, seek, volume           | Node.js 18+, yt-dlp, mpv or ffplay       |
+| [code-akram/cc-fm-mod](https://github.com/code-akram/cc-fm-mod) | a spectrum under the Claude Code prompt | `/fm` commands in Claude Code | Go, ffmpeg, yt-dlp, Claude Code 2.1.287+ |
+
+Both alternatives play only the audio. claude-fm plays the video too, so you
+see Clawd's animation and each track's artist credit. The trade-off is a
+terminal with kitty graphics and no playback controls. For pause and seek, use
+claudefm; to keep the music inside Claude Code, including over SSH, use
+cc-fm-mod.
 
 ## How it works
 
@@ -89,47 +100,37 @@ clau.de/radio ─► yt-dlp ─► HLS video URL + HLS audio URL
    (wrapped in tmux passthrough, placed at the pane's screen position)
 ```
 
-**Sync.** YouTube serves video and audio as separate HLS playlists that do not
-start on the same segment. Both ffmpeg processes run with `-copyts` so the
-streams keep their absolute timestamps, and the `showinfo`/`ashowinfo` filters
-log the index and pts of every frame and audio chunk. The player keeps those
-in a ring indexed by frame number and looks each raw frame from the pipe up by
-its position, so the log reader can never block ffmpeg. It trims whichever
-stream starts earlier, feeds the PCM to mpv, and polls mpv's `time-pos` 25
-times a second. Each video frame is shown when the smoothed mpv clock reaches
-its timestamp; frames keep their native timing, no frame-rate filter fills
-gaps with duplicates.
+**Sync.** YouTube serves video and audio as separate HLS playlists that start
+on different segments. Both ffmpeg processes run with `-copyts` to keep absolute
+timestamps, and `showinfo`/`ashowinfo` log the pts of every frame and audio
+chunk. The player trims whichever stream starts earlier, feeds the PCM to mpv,
+and polls mpv's `time-pos` 25 times a second. Each frame is shown when the
+smoothed clock reaches its timestamp; frames keep their native timing, with no
+duplicates inserted to fill gaps.
 
-Audio and video are deliberately separate processes: audio runs a few seconds
-ahead inside mpv's cache, so a slow terminal or a network hiccup never reaches
-the speaker, while late video frames are dropped rather than shown. ffmpeg's
-pacing options (`-re`, `-readrate`) are not used; on this stream they deliver
-only ~0.6x real time.
+Audio runs a few seconds ahead in mpv's cache, so a slow terminal or a network
+hiccup never reaches the speaker; late video frames are dropped instead.
+ffmpeg's own pacing (`-re`, `-readrate`) is not used, since on this stream it
+delivers only ~0.6x real time.
 
-**Stalls.** A live stream hiccups: segments go missing, timestamps jump, a
-connection dies quietly. A watchdog fails the session when the playback clock
-stops advancing for 6 s, when no audio or video arrives for 8 s, or when the
-next video frame sits more than 5 s ahead of the audio clock for 5 s. The
-player then reconnects, exactly as it does when ffmpeg exits. Memory is bounded
-on every side: frame buffers are allocated once for the queue, mpv's demuxer
-cache is capped at 32 MiB forward and 2 MiB back, and ffmpeg is never left
-blocked on a log write.
+**Stalls.** If the playback clock stops for 6 s, no audio or video arrives for
+8 s, or the next video frame stays more than 5 s ahead of the audio clock for
+5 s, a watchdog ends the session and the player reconnects, as it does when
+ffmpeg exits. Memory is bounded throughout: frame buffers are allocated once,
+mpv's demuxer cache is capped at 32 MiB forward and 2 MiB back, and ffmpeg is
+never left blocked on a log write.
 
-**Picture.** The pane's pixel size (cell size from tmux's `client_cell_width`,
-`TIOCGWINSZ` or the `CSI 16 t` query outside tmux) picks the largest of 1280×720,
-854×480, 640×360 or 426×240 that fits the 16:9 area the image will cover; the
-terminal scales it to that area. Each yuv420p frame is reduced to the 256 most
-used colours of that frame (exact for this flat art) and encoded as a paletted
-PNG in about ten milliseconds. Frames alternate between two kitty image ids and
-the previous id is deleted after each frame, so the terminal never accumulates
-images. Images sit below the text layer. Inside tmux the frame is addressed by
-absolute screen position with the cursor saved and restored around it, so other
-panes are untouched; pane visibility is checked on focus events and every 200 ms,
-the picture is deleted the moment the pane is hidden and comes back when shown.
+**Picture.** From the pane's pixel size, the player picks the largest of
+1280×720, 854×480, 640×360 or 426×240 that fits, and the terminal scales it the
+rest of the way. Each frame is reduced to its 256 most used colours (exact for
+this flat art) and encoded as a paletted PNG in about 10 ms. Frames alternate
+between two kitty image ids, deleting the previous one, so images never pile up
+in the terminal. Inside tmux each frame is placed at the pane's absolute screen
+position, leaving other panes untouched, and is hidden whenever the pane is.
 
 Shrinking the pane just re-fits the picture. Growing it past the current source
-resolution reconnects once with a bigger source, after the resize has settled
-for 300 ms so a window drag does not reconnect at every intermediate size.
+resolution reconnects once with a bigger source, after the resize has been
+stable for 300 ms.
 
 ## Layout
 
@@ -149,36 +150,16 @@ make test         # also runs the ffmpeg/mpv integration test on a generated cli
 make lint         # go vet + gopls check (uses go run if gopls is not installed)
 ```
 
-Set `CLAUDE_FM_FORCE_GRAPHICS=1` to skip the terminal check, for example to
-run the full player headless in a detached tmux session while watching its log.
-
-## Other ways to listen
-
-Claude Code's own `/radio` opens https://clau.de/radio in a browser, or prints
-the URL when there is no browser. Everything below is unofficial, including
-this project.
-
-| Project                                                                     | What you get                                                                                     | Runs on                                        | Needs                                    |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------- | ---------------------------------------- |
-| [claude-fm](.) (this repo)                                                  | video and audio in a terminal pane, follows tmux splits and resizes                              | macOS, Linux; any terminal with kitty graphics | Go, yt-dlp, ffmpeg, mpv                  |
-| [GithubAnant/claudefm](https://github.com/GithubAnant/claudefm)             | audio only, with pause/seek/volume controls and a small dashboard                                | macOS, Linux                                   | Node.js 18+, yt-dlp, mpv or ffplay       |
-| [code-akram/cc-fm-mod](https://github.com/code-akram/cc-fm-mod)             | audio only, plus a live spectrum drawn under the Claude Code prompt via a plugin; works over SSH | macOS, Linux                                   | Go, ffmpeg, yt-dlp, Claude Code 2.1.287+ |
-| [LorenzoZemp/ClaudeFMPlayer](https://github.com/LorenzoZemp/ClaudeFMPlayer) | audio only from the macOS menu bar, with Now Playing integration                                 | macOS 26+                                      | yt-dlp                                   |
-| [sn0wjin19/Claude-FM-Player](https://github.com/sn0wjin19/Claude-FM-Player) | audio only in a small desktop window                                                             | Windows                                        |                                          |
-| plain mpv                                                                   | `mpv --no-video https://clau.de/radio` for audio, drop the flag for a video window               | anywhere mpv runs                              | mpv, yt-dlp                              |
-
-The difference that matters: the others play the audio track and leave the
-video on YouTube. This project exists to show the picture too, with Clawd's
-animation and the on-screen artist credit, without leaving the terminal.
+`CLAUDE_FM_FORCE_GRAPHICS=1` skips the terminal check, e.g. to run the player
+headless in a detached tmux session while watching its log.
 
 ## Notes
 
-- Terminal emulators embedded in other programs (Neovim's `:terminal`, VS Code's
-  integrated terminal, Emacs vterm) do not pass graphics through to the real
-  terminal, so the start-up check refuses to run there.
-- The stream URL changes when Anthropic restarts the broadcast and media URLs
-  expire after a few hours; the player re-resolves and reconnects on its own.
-- Cost on an M-series Mac at 1280×720: roughly 50% of one core for the player,
-  10% for ffmpeg, about 270 KB per frame of terminal output at 30 fps. Resident
-  memory settles around 150 MB for the player, 90 MB for the video ffmpeg and
-  under 300 MB for mpv, and stays there.
+- Terminals embedded in other programs (Neovim's `:terminal`, VS Code, Emacs
+  vterm) don't pass graphics through, so claude-fm refuses to start there.
+- The stream URL changes when the broadcast restarts and media URLs expire
+  after a few hours; the player re-resolves and reconnects on its own.
+- On an M-series Mac at 1280×720 and 30 fps: about 50% of one core for the
+  player and 10% for ffmpeg, ~270 KB of terminal output per frame. Memory holds
+  steady at about 150 MB for the player, 90 MB for video ffmpeg and under
+  300 MB for mpv.
