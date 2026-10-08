@@ -55,6 +55,7 @@ cd claude-fm
 make build        # or: go build -o claude-fm ./cmd/claude-fm
 ./claude-fm
 make install      # copies the binary to ~/.local/bin (override with PREFIX=/usr/local)
+make uninstall    # removes it again (same PREFIX)
 ```
 
 Flags (all optional):
