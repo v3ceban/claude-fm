@@ -20,6 +20,32 @@ func TestParseIntField(t *testing.T) {
 	if _, ok := parseIntField(a, "missing:"); ok {
 		t.Fatal("missing key should not parse")
 	}
+	if n, ok := parseIntField(a, "] n:"); !ok || n != 1 {
+		t.Fatalf("n = %d %v", n, ok)
+	}
+	if p, ok := parseFloatField(v, "pts_time:"); !ok || p != 467.7 {
+		t.Fatalf("pts_time = %v %v", p, ok)
+	}
+}
+
+func TestPTSRingNeverBlocksAndKeepsRecent(t *testing.T) {
+	r := newPTSRing()
+	for n := range int64(3 * ringSize) {
+		r.set(n, float64(n)/30)
+	}
+	if _, ok := r.get(0); ok {
+		t.Fatal("old entries should be overwritten")
+	}
+	if p, ok := r.get(3*ringSize - 1); !ok || p != float64(3*ringSize-1)/30 {
+		t.Fatalf("latest entry = %v %v", p, ok)
+	}
+	if _, ok := r.wait(3*ringSize, 10*time.Millisecond); ok {
+		t.Fatal("wait should time out for a missing index")
+	}
+	go func() { time.Sleep(5 * time.Millisecond); r.set(3*ringSize, 1) }()
+	if p, ok := r.wait(3*ringSize, 200*time.Millisecond); !ok || p != 1 {
+		t.Fatalf("wait = %v %v", p, ok)
+	}
 }
 
 func TestFrameQueueDropsBeforeAlignmentAndBlocksAfter(t *testing.T) {

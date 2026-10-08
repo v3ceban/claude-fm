@@ -39,7 +39,6 @@ func bin(r, g, b uint8) uint16 {
 	return uint16(r>>(8-binBits))<<(2*binBits) | uint16(g>>(8-binBits))<<binBits | uint16(b>>(8-binBits))
 }
 
-// parallel splits [0, n) into one contiguous range per worker and runs fn on each concurrently.
 func (q *Quantizer) parallel(n int, fn func(lo, hi int)) {
 	var wg sync.WaitGroup
 	per := (n + q.workers - 1) / q.workers

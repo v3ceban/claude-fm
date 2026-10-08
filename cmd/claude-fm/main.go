@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"time"
 	"unicode/utf8"
 
@@ -79,7 +80,7 @@ func main() {
 		os.Exit(1)
 	}
 	a.tty, a.gfx = t, t.Gfx
-	if !a.gfx.Kitty {
+	if !a.gfx.Kitty && os.Getenv("CLAUDE_FM_FORCE_GRAPHICS") == "" {
 		t.Restore()
 		fmt.Fprintf(os.Stderr, "claude-fm needs a terminal with kitty graphics support (kitty, ghostty, WezTerm, iTerm2 3.5+); %q did not answer the graphics query\n", a.gfx.Name)
 		if os.Getenv("NVIM") != "" {
@@ -123,7 +124,6 @@ func (a *App) fitImage() {
 	a.imgX, a.imgY = (a.cols-a.imgCols)/2, (rows-a.imgRows)/2
 }
 
-// chooseSource lays the image out for the current pane and returns the largest source that fits it.
 func (a *App) chooseSource() source {
 	a.fitImage()
 	pw, ph := a.imgCols*a.gfx.CellW, a.imgRows*a.gfx.CellH
@@ -147,7 +147,6 @@ func (a *App) relayout() {
 
 func (a *App) write(s string) { os.Stdout.WriteString(s) }
 
-// redraw clears the screen and repaints the status message, if one is showing.
 func (a *App) redraw() {
 	a.write(clearScreen)
 	a.cleared = false
@@ -220,6 +219,7 @@ func (a *App) run() {
 		a.sess = sess
 		restart := a.present(sess)
 		sess.Stop()
+		debug.FreeOSMemory()
 		if a.quit {
 			return
 		}
@@ -255,7 +255,6 @@ func (a *App) onResize() {
 	a.relayout()
 }
 
-// growSource switches to a bigger source when the pane has outgrown the current one.
 func (a *App) growSource() bool {
 	if s := a.chooseSource(); s.w > a.src.w || s.h > a.src.h {
 		a.setSource(s)
@@ -391,7 +390,10 @@ func (a *App) draw(f *pipeline.Frame) {
 		a.quit = true
 	}
 	a.frames++
-	a.nextOut = t.Add(time.Duration(float64(time.Second) / max(a.fps, 1)))
+	a.nextOut = a.nextOut.Add(time.Duration(float64(time.Second) / max(a.fps, 1)))
+	if a.nextOut.Before(t) {
+		a.nextOut = t
+	}
 	if a.frames%150 == 0 && a.log.Writer() != io.Discard {
 		var m runtime.MemStats
 		runtime.ReadMemStats(&m)

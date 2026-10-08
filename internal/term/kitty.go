@@ -12,7 +12,6 @@ type ImageWriter struct {
 	n                 int
 }
 
-// Frame returns the bytes that show png at row/col (1-based screen cells) over cols x rows and drop the previous frame.
 func (w *ImageWriter) Frame(row, col, cols, rows int, png []byte) []byte {
 	w.enc = base64.StdEncoding.AppendEncode(w.enc[:0], png)
 	id := 1 + w.n%2

@@ -14,20 +14,29 @@ type FrameQueue struct {
 	cap     int
 	closed  bool
 	aligned bool
-	pool    *sync.Pool
+	free    chan []byte
 	dropped int
 	notify  chan struct{}
 }
 
 func NewFrameQueue(capacity, frameBytes int) *FrameQueue {
-	q := &FrameQueue{cap: capacity, notify: make(chan struct{}, 1)}
+	q := &FrameQueue{cap: capacity, notify: make(chan struct{}, 1), free: make(chan []byte, capacity+4)}
 	q.cond = sync.NewCond(&q.mu)
-	q.pool = &sync.Pool{New: func() any { b := make([]byte, frameBytes); return &b }}
+	for range capacity + 4 {
+		q.free <- make([]byte, frameBytes)
+	}
 	return q
 }
 
-func (q *FrameQueue) Get() []byte             { return *(q.pool.Get().(*[]byte)) }
-func (q *FrameQueue) Put(b []byte)            { q.pool.Put(&b) }
+func (q *FrameQueue) Get() []byte { return <-q.free }
+
+func (q *FrameQueue) Put(b []byte) {
+	select {
+	case q.free <- b[:cap(b)]:
+	default:
+	}
+}
+
 func (q *FrameQueue) Notify() <-chan struct{} { return q.notify }
 
 func (q *FrameQueue) Push(f *Frame) bool {
@@ -82,14 +91,28 @@ func (q *FrameQueue) TakeDue(target float64) (f *Frame, next float64, hasNext bo
 	return
 }
 
-func (q *FrameQueue) PeekFirst() *Frame {
+func (q *FrameQueue) PeekPTS() float64 {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if len(q.items) == 0 {
+		return 0
+	}
+	return q.items[0].PTS
+}
+
+func (q *FrameQueue) PeekFirst() *Frame {
+	if q.Len() == 0 {
+		return nil
+	}
+	b := q.Get()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.items) == 0 {
+		q.Put(b)
 		return nil
 	}
 	f := q.items[0]
-	b := q.Get()[:len(f.Buf)]
+	b = b[:len(f.Buf)]
 	copy(b, f.Buf)
 	return &Frame{PTS: f.PTS, Buf: b}
 }
@@ -135,12 +158,11 @@ type AudioChunk struct {
 	Data []byte
 }
 
-// End returns the presentation time just past the chunk's last sample.
 func (c AudioChunk) End() float64 { return c.PTS + float64(len(c.Data))/AudioBytesPerSec }
 
 const (
 	SampleRate       = 48000
-	BytesPerFrame    = 2 * 2 // stereo s16le
+	BytesPerFrame    = 2 * 2
 	AudioBytesPerSec = SampleRate * BytesPerFrame
 )
 

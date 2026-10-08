@@ -32,7 +32,6 @@ type probeReply struct {
 	da           bool
 }
 
-// parseProbe reads the terminal's answers to probeQuery; complete reports that no more input is expected.
 func parseProbe(b []byte) (r probeReply, complete bool) {
 	r.kitty = bytes.Contains(b, []byte("\x1b_Gi=31;OK"))
 	if i := bytes.Index(b, []byte("\x1b[6;")); i >= 0 {

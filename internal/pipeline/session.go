@@ -21,7 +21,7 @@ type Opts struct {
 	SrcW, SrcH int
 	AO         string
 	Volume     int
-	QueueCap   int // frames; derived from a memory budget when 0
+	QueueCap   int
 	Log        *log.Logger
 }
 
@@ -50,11 +50,28 @@ type Session struct {
 	bps     []clockBP
 	sent    int64
 
+	vring, aring *ptsRing
+	lastV, lastA time.Time
+	alignedAt    time.Time
+	lastClock    float64
+	lastAdvance  time.Time
+	aheadSince   time.Time
+
 	Done     chan struct{}
 	err      error
 	lastLine string
 	closed   bool
 }
+
+const (
+	stallGrace  = 10 * time.Second
+	clockStall  = 6 * time.Second
+	feedStall   = 8 * time.Second
+	aheadLimit  = 5.0
+	aheadStall  = 5 * time.Second
+	audioChunk  = 1024
+	audioChunkB = audioChunk * BytesPerFrame
+)
 
 func FrameBytes(w, h int) int { return w * h * 3 / 2 }
 
@@ -110,7 +127,7 @@ func Start(o Opts) (*Session, error) {
 		const budget = 160 << 20
 		o.QueueCap = min(max(budget/FrameBytes(o.SrcW, o.SrcH), 20), 60)
 	}
-	s := &Session{opts: o, Done: make(chan struct{}), alignedCh: make(chan struct{})}
+	s := &Session{opts: o, Done: make(chan struct{}), alignedCh: make(chan struct{}), vring: newPTSRing(), aring: newPTSRing()}
 	s.Frames = NewFrameQueue(o.QueueCap, FrameBytes(o.SrcW, o.SrcH))
 	s.audio = NewAudioBuffer(30)
 	m, err := startMPV(o.AO, o.Volume)
@@ -118,7 +135,7 @@ func Start(o Opts) (*Session, error) {
 		return nil, err
 	}
 	s.mpv = m
-	vf := fmt.Sprintf("fps=30,scale=%d:%d:force_original_aspect_ratio=decrease:flags=area,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,settb=1/30,showinfo=checksum=0", o.SrcW, o.SrcH, o.SrcW, o.SrcH)
+	vf := fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease:flags=area,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,showinfo=checksum=0", o.SrcW, o.SrcH, o.SrcW, o.SrcH)
 	vargs := append(s.inputArgs(o.URLs[0]), "-map", "0:v:0", "-vf", vf,
 		"-fps_mode", "passthrough", "-pix_fmt", "yuv420p", "-f", "rawvideo", "pipe:1")
 	vcmd, vout, verr, err := s.spawn(vargs)
@@ -126,35 +143,17 @@ func Start(o Opts) (*Session, error) {
 		s.Stop()
 		return nil, err
 	}
-	vpts := make(chan float64, 4096)
-	parseV := func() {
-		defer close(vpts)
-		s.parseStderr(verr, func(line string) {
-			if p, ok := parseIntField(line, " pts:"); ok {
-				vpts <- float64(p) / 30
-			}
-		})
-	}
-	s.supervise(vcmd, func() {}, parseV, func() { s.readVideo(vout, vpts) })
-	af := fmt.Sprintf("aresample=%d,asetnsamples=1024,asettb=1/%d,ashowinfo", SampleRate, SampleRate)
+	parseV := func() { s.parseStderr(verr, s.vring) }
+	s.supervise(vcmd, func() {}, parseV, func() { s.readVideo(vout) })
+	af := fmt.Sprintf("aresample=%d,asetnsamples=%d,ashowinfo", SampleRate, audioChunk)
 	aargs := append(s.inputArgs(o.URLs[len(o.URLs)-1]), "-map", "0:a:0", "-af", af, "-ac", "2", "-f", "s16le", "pipe:1")
 	acmd, aout, aerr, err := s.spawn(aargs)
 	if err != nil {
 		s.Stop()
 		return nil, err
 	}
-	apts := make(chan [2]int64, 4096)
-	parseA := func() {
-		defer close(apts)
-		s.parseStderr(aerr, func(line string) {
-			p, ok1 := parseIntField(line, " pts:")
-			n, ok2 := parseIntField(line, "nb_samples:")
-			if ok1 && ok2 {
-				apts <- [2]int64{p, n}
-			}
-		})
-	}
-	s.supervise(acmd, s.audio.Close, parseA, func() { s.readAudio(aout, apts) })
+	parseA := func() { s.parseStderr(aerr, s.aring) }
+	s.supervise(acmd, s.audio.Close, parseA, func() { s.readAudio(aout) })
 	go s.forwardAudio()
 	go s.pollClock()
 	return s, nil
@@ -198,25 +197,43 @@ func (s *Session) Stop() {
 	}
 }
 
-func parseIntField(line, key string) (int64, bool) {
+func parseField(line, key string) (string, bool) {
 	_, rest, ok := strings.Cut(line, key)
 	f := strings.Fields(rest)
 	if !ok || len(f) == 0 {
+		return "", false
+	}
+	return f[0], true
+}
+
+func parseIntField(line, key string) (int64, bool) {
+	f, ok := parseField(line, key)
+	if !ok {
 		return 0, false
 	}
-	v, err := strconv.ParseInt(f[0], 10, 64)
+	v, err := strconv.ParseInt(f, 10, 64)
 	return v, err == nil
 }
 
-// parseStderr passes per-frame showinfo/ashowinfo lines to onInfo and logs everything else.
-func (s *Session) parseStderr(r io.Reader, onInfo func(line string)) {
+func parseFloatField(line, key string) (float64, bool) {
+	f, ok := parseField(line, key)
+	if !ok {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(f, 64)
+	return v, err == nil
+}
+
+func (s *Session) parseStderr(r io.Reader, ring *ptsRing) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for sc.Scan() {
 		line := sc.Text()
 		if strings.Contains(line, "Parsed_showinfo_") || strings.Contains(line, "Parsed_ashowinfo_") {
-			if strings.Contains(line, "] n:") {
-				onInfo(line)
+			n, ok1 := parseIntField(line, "] n:")
+			pts, ok2 := parseFloatField(line, "pts_time:")
+			if ok1 && ok2 {
+				ring.set(n, pts)
 			}
 			continue
 		}
@@ -230,29 +247,25 @@ func (s *Session) parseStderr(r io.Reader, onInfo func(line string)) {
 	}
 }
 
-func (s *Session) readVideo(r io.Reader, vpts <-chan float64) {
+func (s *Session) readVideo(r io.Reader) {
 	br := bufio.NewReaderSize(r, 4<<20)
 	size := FrameBytes(s.opts.SrcW, s.opts.SrcH)
-	last := -1.0
-	for {
+	last, step := 0.0, 1.0/30
+	for n := int64(0); ; n++ {
 		buf := s.Frames.Get()
 		if _, err := io.ReadFull(br, buf[:size]); err != nil {
 			s.Frames.Put(buf)
 			return
 		}
-		var pts float64
-		select {
-		case p, ok := <-vpts:
-			if ok {
-				pts = p
-			} else {
-				pts = last + 1.0/30
-			}
-		case <-time.After(2 * time.Second):
-			pts = last + 1.0/30
+		pts, ok := s.vring.wait(n, 500*time.Millisecond)
+		if !ok {
+			pts = last + step
+		} else if n > 0 && pts > last && pts-last < 1 {
+			step = pts - last
 		}
 		last = pts
 		s.mu.Lock()
+		s.lastV = time.Now()
 		if !s.haveV {
 			s.haveV, s.firstV = true, pts
 			s.opts.Log.Printf("first video pts %.3f", pts)
@@ -265,16 +278,24 @@ func (s *Session) readVideo(r io.Reader, vpts <-chan float64) {
 	}
 }
 
-func (s *Session) readAudio(r io.ReadCloser, apts <-chan [2]int64) {
+func (s *Session) readAudio(r io.ReadCloser) {
 	defer r.Close()
 	br := bufio.NewReaderSize(r, 1<<20)
-	for meta := range apts {
-		data := make([]byte, int(meta[1])*BytesPerFrame)
-		if _, err := io.ReadFull(br, data); err != nil {
+	last, lastLen := 0.0, 0
+	for n := int64(0); ; n++ {
+		data := make([]byte, audioChunkB)
+		got, err := io.ReadFull(br, data)
+		if got == 0 || (err != nil && err != io.ErrUnexpectedEOF) {
 			return
 		}
-		pts := float64(meta[0]) / SampleRate
+		data = data[:got]
+		pts, ok := s.aring.wait(n, 500*time.Millisecond)
+		if !ok {
+			pts = last + float64(lastLen)/AudioBytesPerSec
+		}
+		last, lastLen = pts, got
 		s.mu.Lock()
+		s.lastA = time.Now()
 		if !s.haveA {
 			s.haveA, s.firstA = true, pts
 			s.opts.Log.Printf("first audio pts %.3f", pts)
@@ -295,6 +316,8 @@ func (s *Session) maybeAlign() {
 	}
 	t0 := max(s.firstV, s.firstA)
 	s.t0, s.aligned = t0, true
+	s.alignedAt = time.Now()
+	s.lastAdvance = s.alignedAt
 	s.mu.Unlock()
 	s.opts.Log.Printf("aligned at t0=%.3f (video %.3f audio %.3f)", t0, s.firstV, s.firstA)
 	s.Frames.SetAligned(t0)
@@ -401,7 +424,41 @@ func (s *Session) pollClock() {
 			return
 		default:
 		}
+		if err := s.stalled(now); err != nil {
+			s.fail(err)
+			return
+		}
 	}
+}
+
+func (s *Session) stalled(now time.Time) error {
+	clk, ok := s.Clock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.aligned || now.Sub(s.alignedAt) < stallGrace {
+		return nil
+	}
+	if ok && clk > s.lastClock+0.1 {
+		s.lastClock, s.lastAdvance = clk, now
+	} else if now.Sub(s.lastAdvance) > clockStall {
+		return fmt.Errorf("playback clock stalled")
+	}
+	if now.Sub(s.lastA) > feedStall {
+		return fmt.Errorf("no audio for %s", feedStall)
+	}
+	if now.Sub(s.lastV) > feedStall && s.Frames.Len() < s.opts.QueueCap/2 {
+		return fmt.Errorf("no video for %s", feedStall)
+	}
+	if f := s.Frames.PeekPTS(); ok && f > clk+aheadLimit {
+		if s.aheadSince.IsZero() {
+			s.aheadSince = now
+		} else if now.Sub(s.aheadSince) > aheadStall {
+			return fmt.Errorf("video %.0fs ahead of audio", f-clk)
+		}
+	} else {
+		s.aheadSince = time.Time{}
+	}
+	return nil
 }
 
 func (s *Session) Clock() (float64, bool) {

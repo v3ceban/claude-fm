@@ -236,7 +236,6 @@ func RefreshClient() {
 	}
 }
 
-// Passthrough appends payload to dst, wrapped in a tmux passthrough sequence when running inside tmux.
 func Passthrough(dst, payload []byte) []byte {
 	if !inTmux {
 		return append(dst, payload...)

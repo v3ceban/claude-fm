@@ -65,8 +65,8 @@ clau.de/radio ─► yt-dlp ─► HLS video URL + HLS audio URL
                     │                        │
                     ▼                        ▼
       ffmpeg #1 (video, -copyts)      ffmpeg #2 (audio, -copyts)
-      fps=30, scale, yuv420p,         48 kHz s16le, ashowinfo
-      showinfo ─► pipe                ─► pipe
+      scale, yuv420p, showinfo        48 kHz s16le, ashowinfo
+      ─► pipe                         ─► pipe
                     │                        │
                     ▼                        ▼
       frame queue (bounded,           mpv (rawaudio over a pipe,
@@ -83,16 +83,28 @@ clau.de/radio ─► yt-dlp ─► HLS video URL + HLS audio URL
 **Sync.** YouTube serves video and audio as separate HLS playlists that do not
 start on the same segment. Both ffmpeg processes run with `-copyts` so the
 streams keep their absolute timestamps, and the `showinfo`/`ashowinfo` filters
-log the pts of every frame and audio chunk. The player pairs those log lines
-with the raw bytes from the pipes, trims whichever stream starts earlier, feeds
-the PCM to mpv, and polls mpv's `time-pos` 25 times a second. Each video frame
-is shown when the smoothed mpv clock reaches its timestamp.
+log the index and pts of every frame and audio chunk. The player keeps those
+in a ring indexed by frame number and looks each raw frame from the pipe up by
+its position, so the log reader can never block ffmpeg. It trims whichever
+stream starts earlier, feeds the PCM to mpv, and polls mpv's `time-pos` 25
+times a second. Each video frame is shown when the smoothed mpv clock reaches
+its timestamp; frames keep their native timing, no frame-rate filter fills
+gaps with duplicates.
 
 Audio and video are deliberately separate processes: audio runs a few seconds
 ahead inside mpv's cache, so a slow terminal or a network hiccup never reaches
 the speaker, while late video frames are dropped rather than shown. ffmpeg's
 pacing options (`-re`, `-readrate`) are not used; on this stream they deliver
 only ~0.6x real time.
+
+**Stalls.** A live stream hiccups: segments go missing, timestamps jump, a
+connection dies quietly. A watchdog fails the session when the playback clock
+stops advancing for 6 s, when no audio or video arrives for 8 s, or when the
+next video frame sits more than 5 s ahead of the audio clock for 5 s. The
+player then reconnects, exactly as it does when ffmpeg exits. Memory is bounded
+on every side: frame buffers are allocated once for the queue, mpv's demuxer
+cache is capped at 32 MiB forward and 2 MiB back, and ffmpeg is never left
+blocked on a log write.
 
 **Picture.** The pane's pixel size (cell size from tmux's `client_cell_width`,
 `TIOCGWINSZ` or the `CSI 16 t` query outside tmux) picks the largest of 1280×720,
@@ -128,6 +140,9 @@ make test         # also runs the ffmpeg/mpv integration test on a generated cli
 make lint         # go vet + gopls check (uses go run if gopls is not installed)
 ```
 
+Set `CLAUDE_FM_FORCE_GRAPHICS=1` to skip the terminal check, for example to
+run the full player headless in a detached tmux session while watching its log.
+
 ## Other ways to listen
 
 Claude Code's own `/radio` opens https://clau.de/radio in a browser, or prints
@@ -155,4 +170,6 @@ animation and the on-screen artist credit, without leaving the terminal.
 - The stream URL changes when Anthropic restarts the broadcast and media URLs
   expire after a few hours; the player re-resolves and reconnects on its own.
 - Cost on an M-series Mac at 1280×720: roughly 50% of one core for the player,
-  10% for ffmpeg, about 270 KB per frame of terminal output at 30 fps.
+  10% for ffmpeg, about 270 KB per frame of terminal output at 30 fps. Resident
+  memory settles around 150 MB for the player, 90 MB for the video ffmpeg and
+  under 300 MB for mpv, and stays there.

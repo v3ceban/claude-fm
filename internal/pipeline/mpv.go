@@ -32,7 +32,8 @@ func startMPV(ao string, volume int) (*MPV, error) {
 		"--no-config", "--no-video", "--no-terminal", "--really-quiet",
 		"--demuxer=rawaudio", "--demuxer-rawaudio-format=s16le",
 		fmt.Sprintf("--demuxer-rawaudio-rate=%d", SampleRate), "--demuxer-rawaudio-channels=2",
-		"--cache=yes", "--cache-pause=no", "--demuxer-readahead-secs=10", "--audio-buffer=0.3", "--idle=no", "--keep-open=no",
+		"--cache=yes", "--cache-pause=no", "--demuxer-readahead-secs=10", "--demuxer-max-bytes=32MiB", "--demuxer-max-back-bytes=2MiB",
+		"--audio-buffer=0.3", "--idle=no", "--keep-open=no",
 		"--input-ipc-server=" + sock,
 		fmt.Sprintf("--volume=%d", volume),
 	}
