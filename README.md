@@ -38,6 +38,15 @@ claude-fm
 The binary lands in `$(go env GOBIN)` or `$(go env GOPATH)/bin`, which is
 usually `~/go/bin`; make sure that is on your `PATH`.
 
+To update, run the same command again; `@latest` fetches the newest commit
+(or tag) and overwrites the binary. To uninstall, delete the binary; Go keeps
+no other state:
+
+```sh
+rm "$(go env GOPATH)/bin/claude-fm"     # or $(go env GOBIN)/claude-fm if GOBIN is set
+go clean -modcache                       # optional: drops the downloaded sources for every module
+```
+
 From a checkout:
 
 ```sh
