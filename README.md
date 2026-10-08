@@ -6,6 +6,8 @@ pixels, the audio plays through mpv, and the picture follows the pane through
 splits, zooms, window switches and resizes. Press `q` to quit. That is the
 whole UI.
 
+![claude-fm playing Claude FM in a tmux pane next to Neovim and Claude Code](docs/screenshot.png)
+
 ## Requirements
 
 | Tool     | Why                                                                     | Install (macOS)       |
