@@ -1,4 +1,4 @@
-module claude-fm
+module github.com/v3ceban/claude-fm
 
 go 1.27
 

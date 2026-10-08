@@ -24,9 +24,23 @@ for the terminal's answer, so there is no allow-list of terminal names.
 tmux is optional. Inside tmux the app enables `allow-passthrough` for its own
 pane and `focus-events` for the server (restored on exit if it was off).
 
-## Build and run
+## Install
+
+With a Go toolchain, straight from GitHub:
 
 ```sh
+go install github.com/v3ceban/claude-fm/cmd/claude-fm@latest
+claude-fm
+```
+
+The binary lands in `$(go env GOBIN)` or `$(go env GOPATH)/bin`, which is
+usually `~/go/bin`; make sure that is on your `PATH`.
+
+From a checkout:
+
+```sh
+git clone https://github.com/v3ceban/claude-fm.git
+cd claude-fm
 make build        # or: go build -o claude-fm ./cmd/claude-fm
 ./claude-fm
 make install      # copies the binary to ~/.local/bin (override with PREFIX=/usr/local)
@@ -118,14 +132,14 @@ Claude Code's own `/radio` opens https://clau.de/radio in a browser, or prints
 the URL when there is no browser. Everything below is unofficial, including
 this project.
 
-| Project | What you get | Runs on | Needs |
-| ------- | ------------ | ------- | ----- |
-| [claude-fm](.) (this repo) | video and audio in a terminal pane, follows tmux splits and resizes | macOS, Linux; any terminal with kitty graphics | Go, yt-dlp, ffmpeg, mpv |
-| [GithubAnant/claudefm](https://github.com/GithubAnant/claudefm) | audio only, with pause/seek/volume controls and a small dashboard | macOS, Linux | Node.js 18+, yt-dlp, mpv or ffplay |
-| [code-akram/cc-fm-mod](https://github.com/code-akram/cc-fm-mod) | audio only, plus a live spectrum drawn under the Claude Code prompt via a plugin; works over SSH | macOS, Linux | Go, ffmpeg, yt-dlp, Claude Code 2.1.287+ |
-| [LorenzoZemp/ClaudeFMPlayer](https://github.com/LorenzoZemp/ClaudeFMPlayer) | audio only from the macOS menu bar, with Now Playing integration | macOS 26+ | yt-dlp |
-| [sn0wjin19/Claude-FM-Player](https://github.com/sn0wjin19/Claude-FM-Player) | audio only in a small desktop window | Windows | |
-| plain mpv | `mpv --no-video https://clau.de/radio` for audio, drop the flag for a video window | anywhere mpv runs | mpv, yt-dlp |
+| Project                                                                     | What you get                                                                                     | Runs on                                        | Needs                                    |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------- | ---------------------------------------- |
+| [claude-fm](.) (this repo)                                                  | video and audio in a terminal pane, follows tmux splits and resizes                              | macOS, Linux; any terminal with kitty graphics | Go, yt-dlp, ffmpeg, mpv                  |
+| [GithubAnant/claudefm](https://github.com/GithubAnant/claudefm)             | audio only, with pause/seek/volume controls and a small dashboard                                | macOS, Linux                                   | Node.js 18+, yt-dlp, mpv or ffplay       |
+| [code-akram/cc-fm-mod](https://github.com/code-akram/cc-fm-mod)             | audio only, plus a live spectrum drawn under the Claude Code prompt via a plugin; works over SSH | macOS, Linux                                   | Go, ffmpeg, yt-dlp, Claude Code 2.1.287+ |
+| [LorenzoZemp/ClaudeFMPlayer](https://github.com/LorenzoZemp/ClaudeFMPlayer) | audio only from the macOS menu bar, with Now Playing integration                                 | macOS 26+                                      | yt-dlp                                   |
+| [sn0wjin19/Claude-FM-Player](https://github.com/sn0wjin19/Claude-FM-Player) | audio only in a small desktop window                                                             | Windows                                        |                                          |
+| plain mpv                                                                   | `mpv --no-video https://clau.de/radio` for audio, drop the flag for a video window               | anywhere mpv runs                              | mpv, yt-dlp                              |
 
 The difference that matters: the others play the audio track and leave the
 video on YouTube. This project exists to show the picture too, with Clawd's

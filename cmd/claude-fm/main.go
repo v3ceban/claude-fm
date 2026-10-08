@@ -12,10 +12,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"claude-fm/internal/pipeline"
-	"claude-fm/internal/render"
-	"claude-fm/internal/stream"
-	"claude-fm/internal/term"
+	"github.com/v3ceban/claude-fm/internal/pipeline"
+	"github.com/v3ceban/claude-fm/internal/render"
+	"github.com/v3ceban/claude-fm/internal/stream"
+	"github.com/v3ceban/claude-fm/internal/term"
 )
 
 const streamURL = "https://clau.de/radio"
