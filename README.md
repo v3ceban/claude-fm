@@ -26,12 +26,12 @@ for the terminal's answer, so there is no allow-list of terminal names.
 tmux is optional. Inside tmux the app enables `allow-passthrough` for its own
 pane and `focus-events` for the server (restored on exit if it was off).
 
-## Install
+## Install and Update
 
 With a Go toolchain, straight from GitHub:
 
 ```sh
-go install github.com/v3ceban/claude-fm/cmd/claude-fm@latest
+go install github.com/v3ceban/claude-fm@latest
 claude-fm
 ```
 
@@ -39,11 +39,10 @@ The binary lands in `$(go env GOBIN)` or `$(go env GOPATH)/bin`, which is
 usually `~/go/bin`; make sure that is on your `PATH`.
 
 To update, run the same command again; `@latest` fetches the newest commit
-(or tag) and overwrites the binary. To uninstall, delete the binary; Go keeps
-no other state:
+(or tag) and overwrites the binary. To uninstall, delete the binary:
 
 ```sh
-rm "$(go env GOPATH)/bin/claude-fm"     # or $(go env GOBIN)/claude-fm if GOBIN is set
+rm "$(go env GOPATH)/bin/claude-fm"      # or $(go env GOBIN)/claude-fm if GOBIN is set
 go clean -modcache                       # optional: drops the downloaded sources for every module
 ```
 
@@ -52,10 +51,10 @@ From a checkout:
 ```sh
 git clone https://github.com/v3ceban/claude-fm.git
 cd claude-fm
-make build        # or: go build -o claude-fm ./cmd/claude-fm
+make build        # or: go build -o claude-fm .
 ./claude-fm
-make install      # copies the binary to ~/.local/bin (override with PREFIX=/usr/local)
-make uninstall    # removes it again (same PREFIX)
+make install      # builds and copies the binary to ~/.local/bin (override with PREFIX=/usr/local)
+make uninstall    # removes the binary (same PREFIX)
 ```
 
 Flags (all optional):
@@ -135,7 +134,7 @@ for 300 ms so a window drag does not reconnect at every intermediate size.
 ## Layout
 
 ```
-cmd/claude-fm/      CLI and presentation loop
+main.go                CLI and presentation loop
 internal/render/       adaptive quantizer and PNG frame encoder
 internal/pipeline/     ffmpeg + mpv session, frame/audio queues, A/V clock
 internal/stream/       yt-dlp resolution

@@ -1,11 +1,11 @@
 BIN := claude-fm
-GOFILES := $(shell find cmd internal -name '*.go')
+GOFILES := $(shell find . -name '*.go' -not -path './.git/*')
 GOPLS := $(shell command -v gopls 2>/dev/null || echo go run golang.org/x/tools/gopls@latest)
 
 .PHONY: build run install uninstall test test-short lint fmt clean
 
 build:
-	go build -o $(BIN) ./cmd/claude-fm
+	go build -o $(BIN) .
 
 run: build
 	./$(BIN)
@@ -30,7 +30,7 @@ lint:
 	$(GOPLS) check $(GOFILES)
 
 fmt:
-	gofmt -l -w cmd internal
+	gofmt -l -w .
 
 clean:
 	rm -f $(BIN)
