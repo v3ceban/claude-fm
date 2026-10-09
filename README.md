@@ -88,31 +88,25 @@ cookies can get that account rate-limited, so a secondary account is safer.
 | [code-akram/cc-fm-mod](https://github.com/code-akram/cc-fm-mod) | a spectrum under the Claude Code prompt | `/fm` commands in Claude Code | Go, ffmpeg, yt-dlp, Claude Code 2.1.287+ |
 
 Both alternatives play only the audio. claude-fm plays the video too, so you
-see Clawd's animation and each track's artist credit. The trade-off is a
-terminal with kitty graphics and no playback controls. For pause and seek, use
-claudefm; to keep the music inside Claude Code, including over SSH, use
-cc-fm-mod.
+see Clawd's animation and each track's artist credit.
 
 ## How it works
 
-```
-clau.de/radio ─► yt-dlp ─► HLS video URL + HLS audio URL
-                    │                        │
-                    ▼                        ▼
-      ffmpeg #1 (video, -copyts)      ffmpeg #2 (audio, -copyts)
-      scale, yuv420p, showinfo        48 kHz s16le, ashowinfo
-      ─► pipe                         ─► pipe
-                    │                        │
-                    ▼                        ▼
-      frame queue (bounded,           mpv (rawaudio over a pipe,
-      back-pressures ffmpeg #1)       10 s read-ahead, IPC socket)
-                    │                        │
-                    └── frame shown when ◄── time-pos = master clock
-                        clock ≥ frame pts
-                    │
-                    ▼
-   adaptive 256-colour palette → PNG → kitty graphics escape
-   (wrapped in tmux passthrough, placed at the pane's screen position)
+```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 600
+---
+flowchart TD
+    page["clau.de/radio"] --> ytdlp["yt-dlp"]
+    ytdlp -->|HLS video URL| ffv["`ffmpeg #1 (video, -copyts) scale, yuv420p, showinfo`"]
+    ytdlp -->|HLS audio URL| ffa["`ffmpeg #2 (audio, -copyts) 48 kHz s16le, ashowinfo`"]
+    ffv -->|pipe| queue["`frame queue bounded, back-pressures ffmpeg #1`"]
+    ffa -->|pipe| mpv["`mpv raw audio over a pipe, 10 s read-ahead, IPC socket`"]
+    queue --> show["`frame shown when clock ≥ frame pts`"]
+    mpv -->|time-pos = master clock| show
+    show --> out["`adaptive 256-colour palette → PNG → kitty graphics escape wrapped in tmux passthrough, placed at the pane's screen position`"]
 ```
 
 **Sync.** YouTube serves video and audio as separate HLS playlists that start
