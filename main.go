@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -33,6 +34,10 @@ type app struct {
 	fps    float64
 	log    *log.Logger
 
+	cookies    string
+	useCookies bool
+	exitMsg    string
+
 	tty        *tty.Terminal
 	gfx        tty.Graphics
 	cols, rows int
@@ -62,6 +67,7 @@ func main() {
 	flag.StringVar(&a.input, "input", "", "play a local file or direct media URL instead of Claude FM")
 	flag.IntVar(&a.volume, "volume", 100, "volume 0-130")
 	flag.Float64Var(&a.fps, "fps", 30, "max frames per second to draw")
+	flag.StringVar(&a.cookies, "cookies", "", "if YouTube asks for a bot check, retry with this `browser`'s cookies (chrome, firefox, safari, …)")
 	cellPx := flag.String("cell-px", "", "terminal cell size in pixels as WxH, overrides detection")
 	logPath := flag.String("log", "", "debug log file")
 	flag.Parse()
@@ -95,6 +101,9 @@ func main() {
 		a.deleteImages()
 		t.Restore()
 		tty.RefreshClient()
+		if a.exitMsg != "" {
+			fmt.Fprintln(os.Stderr, a.exitMsg)
+		}
 	}()
 	defer tty.EnableFocusEvents()()
 	a.panes = tty.WatchPane(200 * time.Millisecond)
@@ -198,6 +207,15 @@ func (a *app) run() {
 			}
 			if err != nil {
 				a.log.Printf("resolve: %v", err)
+				if errors.Is(err, stream.ErrBotCheck) {
+					a.botCheck()
+					return
+				}
+				if errors.Is(err, errCookies) {
+					a.stop(fmt.Sprintf("Could not use %s cookies (q to quit)", a.cookies),
+						"claude-fm: "+err.Error())
+					return
+				}
 				if retry(fmt.Sprintf("Could not resolve stream (%v). Retrying…", shortErr(err))) {
 					return
 				}
@@ -281,7 +299,46 @@ func (a *app) wait(d time.Duration) bool {
 	}
 }
 
+var errCookies = errors.New("could not use browser cookies")
+
+func (a *app) botCheck() {
+	if a.cookies == "" {
+		a.stop("YouTube wants a bot check: restart with -cookies chrome (q to quit)",
+			"claude-fm: YouTube asked for a bot check. Restart with -cookies <browser>\n"+
+				"(chrome, firefox, safari, brave, edge, …) naming a browser where you are signed in to YouTube.")
+	} else {
+		a.stop(fmt.Sprintf("YouTube wants a bot check even with %s cookies (q to quit)", a.cookies),
+			fmt.Sprintf("claude-fm: YouTube asked for a bot check even with %s cookies.\n"+
+				"Sign in to YouTube in %s, or try another browser, then restart.", a.cookies, a.cookies))
+	}
+}
+
+func (a *app) stop(screen, exit string) {
+	a.message(screen)
+	a.exitMsg = exit
+	for !a.wait(time.Hour) {
+	}
+}
+
 func (a *app) resolve() ([]string, error) {
+	if a.useCookies {
+		return a.resolveWith(a.cookies)
+	}
+	urls, err := a.resolveWith("")
+	if !errors.Is(err, stream.ErrBotCheck) || a.cookies == "" {
+		return urls, err
+	}
+	a.log.Printf("resolve: %v; retrying with %s cookies", err, a.cookies)
+	a.message(fmt.Sprintf("YouTube wants a bot check, retrying with %s cookies…", a.cookies))
+	a.useCookies = true
+	urls, err = a.resolveWith(a.cookies)
+	if err != nil && !errors.Is(err, stream.ErrBotCheck) && !a.quit {
+		return nil, fmt.Errorf("%w: %w", errCookies, err)
+	}
+	return urls, err
+}
+
+func (a *app) resolveWith(cookies string) ([]string, error) {
 	type res struct {
 		urls []string
 		err  error
@@ -291,7 +348,7 @@ func (a *app) resolve() ([]string, error) {
 	defer cancel()
 	quality := a.src.quality
 	go func() {
-		u, err := stream.Resolve(ctx, streamURL, quality)
+		u, err := stream.Resolve(ctx, streamURL, quality, cookies)
 		ch <- res{u, err}
 	}()
 	for {

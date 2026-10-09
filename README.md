@@ -62,7 +62,22 @@ claude-fm [flags]
 -cell-px WxH    terminal cell size in pixels, if detection is wrong
 -input FILE     play a local file or direct URL instead of Claude FM
 -log FILE       write a debug log
+-cookies NAME   if YouTube asks for a bot check, retry with this browser's cookies
 ```
+
+### "Sign in to confirm you're not a bot"
+
+YouTube sometimes refuses anonymous requests from an address, and yt-dlp then
+fails with this message. claude-fm stops retrying and asks you to restart with
+`-cookies chrome` (or `firefox`, `safari`, `brave`, `edge`, …),
+naming a browser where you are signed in to YouTube. Any value yt-dlp's
+`--cookies-from-browser` accepts works, including `chrome:Profile 1`.
+
+The cookies are used only after an anonymous attempt hits the bot check, and
+are then kept for reconnects until claude-fm exits. On macOS, Chromium-based
+browsers trigger a Keychain prompt to read their cookie store, and Safari needs
+Full Disk Access for your terminal. yt-dlp warns that using a signed-in account's
+cookies can get that account rate-limited, so a secondary account is safer.
 
 ## Other terminal players
 
