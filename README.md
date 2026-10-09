@@ -47,9 +47,14 @@ From a checkout:
 ```sh
 git clone https://github.com/v3ceban/claude-fm.git
 cd claude-fm
-make build        # or: go build -o claude-fm .
 make install      # copies the binary to ~/.local/bin (override with PREFIX=/usr/local)
-make uninstall    # removes it (same PREFIX)
+```
+
+To uninstall:
+
+```sh
+make uninstall    # removes ~/.local/bin/claude-fm (override with PREFIX=/usr/local)
+make clean
 ```
 
 ## Usage
