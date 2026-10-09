@@ -133,6 +133,7 @@ func main() {
 		}
 	}()
 	defer tty.EnableFocusEvents()()
+	defer tty.WatchWindow()()
 	a.panes = tty.WatchPane(200 * time.Millisecond)
 	defer a.panes.Stop()
 	defer a.closeProxy()
@@ -344,22 +345,19 @@ func (a *app) clearOnce() {
 	}
 }
 
-func (a *app) onFocus(in bool) {
-	if !in {
-		a.hideImage()
-	}
-	a.panes.Refresh()
-}
-
 func (a *app) syncPane() {
+	focus := false
 	for {
 		select {
-		case in := <-a.tty.Focus:
-			a.onFocus(in)
+		case <-a.tty.Focus:
+			focus = true
 			continue
 		default:
 		}
 		break
+	}
+	if focus {
+		a.panes.Refresh()
 	}
 	a.pane = a.panes.Get()
 	if !a.pane.Visible {
@@ -644,8 +642,8 @@ func (a *app) present(s *pipeline.Session) restart {
 			return noRestart
 		case <-timer.C:
 		case <-s.Frames.Notify():
-		case in := <-a.tty.Focus:
-			a.onFocus(in)
+		case <-a.tty.Focus:
+			a.panes.Refresh()
 		case <-a.tty.Quit:
 			a.quit = true
 			return noRestart

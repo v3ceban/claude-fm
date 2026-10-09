@@ -265,6 +265,51 @@ func EnableFocusEvents() func() {
 	return func() { tmux("set", "-g", "focus-events", "off").Run() }
 }
 
+const windowHook = "session-window-changed"
+
+func WatchWindow() func() {
+	if !inTmux {
+		return func() {}
+	}
+	pane := os.Getenv("TMUX_PANE")
+	cmd := "if-shell -F -t " + pane + " '#{window_active}' 'send-keys -t " + pane + " -H 1b 5b 49' 'send-keys -t " + pane + " -H 1b 5b 4f'"
+	tmux("set-hook", "-ga", windowHook, cmd).Run()
+	return func() {
+		out, _ := tmux("show-hooks", "-g").Output()
+		for _, name := range hookEntries(string(out), pane) {
+			tmux("set-hook", "-gu", name).Run()
+		}
+		out, _ = tmux("show-hooks", "-g").Output()
+		if !strings.Contains(string(out), windowHook+"[") {
+			tmux("set-hook", "-gu", windowHook).Run()
+		}
+	}
+}
+
+func hookEntries(hooks, pane string) []string {
+	var names []string
+	for line := range strings.SplitSeq(hooks, "\n") {
+		name, cmd, ok := strings.Cut(line, " ")
+		if ok && strings.HasPrefix(name, windowHook+"[") && mentionsPane(cmd, pane) {
+			names = append([]string{name}, names...)
+		}
+	}
+	return names
+}
+
+func mentionsPane(cmd, pane string) bool {
+	for i := 0; ; i++ {
+		j := strings.Index(cmd[i:], pane)
+		if j < 0 {
+			return false
+		}
+		i += j
+		if end := i + len(pane); end == len(cmd) || cmd[end] < '0' || cmd[end] > '9' {
+			return true
+		}
+	}
+}
+
 func RefreshClient() {
 	if inTmux {
 		tmux("refresh-client").Run()

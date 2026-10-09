@@ -45,3 +45,23 @@ func TestParsePane(t *testing.T) {
 		}
 	}
 }
+
+func TestHookEntries(t *testing.T) {
+	hooks := "session-window-changed[0] send-keys -H -t \"%1\" 1b\n" +
+		"session-window-changed[1] if-shell -F -t \"%10\" \"#{window_active}\" \"send-keys -t %10 -H 1b 5b 49\" \"send-keys -t %10 -H 1b 5b 4f\"\n" +
+		"session-window-changed[2] if-shell -F -t \"%1\" \"#{window_active}\" \"send-keys -t %1 -H 1b 5b 49\" \"send-keys -t %1 -H 1b 5b 4f\"\n" +
+		"pane-focus-out[0] send-keys -t %1 x\n"
+	got := hookEntries(hooks, "%1")
+	want := []string{"session-window-changed[2]", "session-window-changed[0]"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+	if hookEntries(hooks, "%2") != nil {
+		t.Fatal("matched a pane that is not mentioned")
+	}
+}

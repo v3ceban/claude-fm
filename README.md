@@ -24,8 +24,10 @@ kitty graphics, so any terminal that answers the query works, such as kitty,
 ghostty, iTerm2, Konsole and WezTerm.
 
 Tmux is supported. Inside tmux, claude-fm enables `allow-passthrough` for its
-own pane and turns on `focus-events` for the server. If `focus-events` was off
-before, claude-fm turns it back off on exit.
+own pane, turns on `focus-events` for the server and adds a
+`session-window-changed` hook that tells its pane about window switches. If
+`focus-events` was off before, claude-fm turns it back off on exit, and it
+removes its hook entry.
 
 ## Install
 
@@ -175,9 +177,10 @@ reproduce it exactly. Frames alternate between two kitty image ids, and drawing
 a frame deletes the one before it, so old images don't build up in the
 terminal. Inside tmux, the player places each frame at the pane's absolute
 screen position, so other panes stay untouched, and hides the picture whenever
-the pane is hidden. It keeps the last frame and redraws it when the pane comes
-back, is resized, or waits for a reconnect, so a paused picture never goes
-blank.
+the pane is hidden. It learns about that from tmux focus events, from its
+window hook when another pane is active, and from a 200 ms poll as a fallback.
+It keeps the last frame and redraws it when the pane comes back, is resized,
+or waits for a reconnect, so a paused picture never goes blank.
 
 ## Layout
 
