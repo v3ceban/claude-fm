@@ -344,9 +344,37 @@ func (a *app) clearOnce() {
 	}
 }
 
+func (a *app) onFocus(in bool) {
+	if !in {
+		a.hideImage()
+	}
+	a.panes.Refresh()
+}
+
+func (a *app) syncPane() {
+	for {
+		select {
+		case in := <-a.tty.Focus:
+			a.onFocus(in)
+			continue
+		default:
+		}
+		break
+	}
+	a.pane = a.panes.Get()
+	if !a.pane.Visible {
+		a.hideImage()
+	} else if !a.shown && a.lastPNG != nil {
+		a.log.Printf("pane visible, redrawing last frame")
+		a.drawPNG(a.lastPNG)
+		a.drawToast()
+	}
+}
+
 func (a *app) hideImage() {
 	if a.shown {
 		a.shown = false
+		a.log.Printf("pane hidden, deleting image")
 		a.deleteImages()
 	}
 }
@@ -616,8 +644,8 @@ func (a *app) present(s *pipeline.Session) restart {
 			return noRestart
 		case <-timer.C:
 		case <-s.Frames.Notify():
-		case <-a.tty.Focus:
-			a.panes.Refresh()
+		case in := <-a.tty.Focus:
+			a.onFocus(in)
 		case <-a.tty.Quit:
 			a.quit = true
 			return noRestart
@@ -638,13 +666,7 @@ func (a *app) present(s *pipeline.Session) restart {
 		}
 
 		a.expireToast()
-		a.pane = a.panes.Get()
-		if !a.pane.Visible {
-			a.hideImage()
-		} else if !a.shown && a.lastPNG != nil {
-			a.drawPNG(a.lastPNG)
-			a.drawToast()
-		}
+		a.syncPane()
 		clk, ok := s.Clock()
 		if !ok {
 			if !shownFirst {
