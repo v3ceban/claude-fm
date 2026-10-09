@@ -303,9 +303,7 @@ var errCookies = errors.New("could not use browser cookies")
 
 func (a *app) botCheck() {
 	if a.cookies == "" {
-		a.stop("YouTube wants a bot check: restart with -cookies chrome (q to quit)",
-			"claude-fm: YouTube asked for a bot check. Restart with -cookies <browser>\n"+
-				"(chrome, firefox, safari, brave, edge, …) naming a browser where you are signed in to YouTube.")
+		a.stop("YouTube wants a bot check: restart with -cookies <browser> (q to quit)", "")
 	} else {
 		a.stop(fmt.Sprintf("YouTube wants a bot check even with %s cookies (q to quit)", a.cookies),
 			fmt.Sprintf("claude-fm: YouTube asked for a bot check even with %s cookies.\n"+
