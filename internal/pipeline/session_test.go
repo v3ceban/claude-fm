@@ -28,6 +28,23 @@ func TestParseIntField(t *testing.T) {
 	}
 }
 
+func TestStalledIgnoresPauses(t *testing.T) {
+	now := time.Now()
+	s := &Session{opts: Opts{QueueCap: 4}, Frames: NewFrameQueue(4, 1), aligned: true,
+		alignedAt: now.Add(-time.Minute), lastAdvance: now.Add(-time.Minute), lastV: now, lastA: now}
+	if err := s.stalled(now); err == nil {
+		t.Fatal("a frozen clock should be reported")
+	}
+	s.paused = true
+	if err := s.stalled(now); err != nil {
+		t.Fatalf("paused playback is not a stall: %v", err)
+	}
+	s.paused = false
+	if err := s.stalled(now.Add(time.Second)); err != nil {
+		t.Fatalf("resuming should start a fresh grace period: %v", err)
+	}
+}
+
 func TestPTSRingNeverBlocksAndKeepsRecent(t *testing.T) {
 	r := newPTSRing()
 	for n := range int64(3 * ringSize) {
@@ -93,6 +110,19 @@ func TestAudioBufferTrimsAndPops(t *testing.T) {
 	if !ok || c.PTS != 1 || a.dropped != 1 {
 		t.Fatalf("pop = %+v %v", c, ok)
 	}
+	a.SetAligned()
+	a.Push(AudioChunk{PTS: 2, Data: make([]byte, 100)})
+	pushed := make(chan bool)
+	go func() { pushed <- a.Push(AudioChunk{PTS: 3, Data: make([]byte, 100)}) }()
+	select {
+	case <-pushed:
+		t.Fatal("push should block once aligned and full")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if c, _ := a.Pop(); c.PTS != 2 || !<-pushed {
+		t.Fatal("pop should release the blocked push")
+	}
+	a.Pop()
 	a.Close()
 	if _, ok := a.Pop(); ok {
 		t.Fatal("pop after close should fail")

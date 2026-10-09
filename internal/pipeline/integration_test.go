@@ -32,7 +32,7 @@ func TestPipelineLocalClip(t *testing.T) {
 	if testing.Verbose() {
 		logger = log.New(os.Stderr, "", log.Ltime)
 	}
-	s, err := Start(Opts{URLs: []string{clip}, Local: true, SrcW: 320, SrcH: 180,
+	s, err := Start(Opts{URLs: []string{clip}, Local: true, Offset: 1, SrcW: 320, SrcH: 180,
 		AO: "null", Volume: 50, QueueCap: 60, Log: logger})
 	if err != nil {
 		t.Fatal(err)
@@ -64,6 +64,9 @@ func TestPipelineLocalClip(t *testing.T) {
 		if got[i] <= got[i-1] {
 			t.Fatalf("frames out of order at %d: %v", i, got[i-2:i+1])
 		}
+	}
+	if got[0] < 0.9 {
+		t.Fatalf("playback should start at the requested offset, first pts %.2f", got[0])
 	}
 	span := got[len(got)-1] - got[0]
 	wall := time.Since(start).Seconds()

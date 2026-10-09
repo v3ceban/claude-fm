@@ -20,18 +20,29 @@ var inTmux = os.Getenv("TMUX") != ""
 
 func tmux(args ...string) *exec.Cmd { return exec.Command("tmux", args...) }
 
+type Key int
+
+const (
+	KeyQuit Key = iota + 1
+	KeyUp
+	KeyDown
+	KeyPause
+	KeyLive
+)
+
 type Terminal struct {
 	fd    int
 	state *xterm.State
 	Quit  chan struct{}
 	Winch chan os.Signal
 	Focus chan bool
+	Keys  chan Key
 	Gfx   Graphics
 	logf  func(string, ...any)
 }
 
 func Open(logf func(string, ...any)) (*Terminal, error) {
-	t := &Terminal{fd: int(os.Stdin.Fd()), Quit: make(chan struct{}, 1), Winch: make(chan os.Signal, 1), Focus: make(chan bool, 4), logf: logf}
+	t := &Terminal{fd: int(os.Stdin.Fd()), Quit: make(chan struct{}, 1), Winch: make(chan os.Signal, 1), Focus: make(chan bool, 4), Keys: make(chan Key, 16), logf: logf}
 	st, err := xterm.MakeRaw(t.fd)
 	if err != nil {
 		return nil, err
@@ -93,10 +104,44 @@ func (t *Terminal) readKeys() {
 			default:
 			}
 		}
-		if IsQuit(buf[:n]) {
-			t.quit()
+		for _, k := range parseKeys(buf[:n]) {
+			if k == KeyQuit {
+				t.quit()
+				continue
+			}
+			select {
+			case t.Keys <- k:
+			default:
+			}
 		}
 	}
+}
+
+func parseKeys(b []byte) []Key {
+	var out []Key
+	for i := 0; i < len(b); i++ {
+		switch c := b[i]; {
+		case c == 0x1b && i+2 < len(b) && (b[i+1] == '[' || b[i+1] == 'O'):
+			switch b[i+2] {
+			case 'A':
+				out = append(out, KeyUp)
+			case 'B':
+				out = append(out, KeyDown)
+			}
+			i += 2
+		case c == 0x1b:
+			if len(b) == 1 {
+				out = append(out, KeyQuit)
+			}
+		case c == 'q' || c == 'Q' || c == 3 || c == 4:
+			out = append(out, KeyQuit)
+		case c == ' ' || c == 'p' || c == 'P':
+			out = append(out, KeyPause)
+		case c == 'l' || c == 'L':
+			out = append(out, KeyLive)
+		}
+	}
+	return out
 }
 
 func focusEvents(b []byte) []bool {
@@ -112,16 +157,6 @@ func focusEvents(b []byte) []bool {
 		}
 	}
 	return out
-}
-
-func IsQuit(b []byte) bool {
-	for _, c := range b {
-		switch c {
-		case 'q', 'Q', 3, 4:
-			return true
-		}
-	}
-	return len(b) == 1 && b[0] == 0x1b
 }
 
 type PaneGeometry struct {

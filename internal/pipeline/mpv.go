@@ -32,7 +32,7 @@ func startMPV(ao string, volume int) (*MPV, error) {
 		"--no-config", "--no-video", "--no-terminal", "--really-quiet",
 		"--demuxer=rawaudio", "--demuxer-rawaudio-format=s16le",
 		fmt.Sprintf("--demuxer-rawaudio-rate=%d", SampleRate), "--demuxer-rawaudio-channels=2",
-		"--cache=yes", "--cache-pause=no", "--demuxer-readahead-secs=10", "--demuxer-max-bytes=32MiB", "--demuxer-max-back-bytes=2MiB",
+		"--cache=yes", "--cache-pause=no", "--demuxer-readahead-secs=10", "--demuxer-max-bytes=64MiB", "--demuxer-max-back-bytes=2MiB",
 		"--audio-buffer=0.3", "--idle=no", "--keep-open=no",
 		"--input-ipc-server=" + sock,
 		fmt.Sprintf("--volume=%d", volume),
@@ -121,6 +121,11 @@ func getProp[T any](m *MPV, prop string) (T, bool) {
 		return v, false
 	}
 	return v, true
+}
+
+func (m *MPV) Set(prop string, v any) error {
+	_, err := m.command("set_property", prop, v)
+	return err
 }
 
 func (m *MPV) GetFloat(prop string) (float64, bool) { return getProp[float64](m, prop) }

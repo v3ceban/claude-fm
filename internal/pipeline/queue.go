@@ -173,6 +173,7 @@ type AudioBuffer struct {
 	bytes   int
 	limit   int
 	closed  bool
+	aligned bool
 	dropped int
 }
 
@@ -182,9 +183,18 @@ func NewAudioBuffer(capSecs float64) *AudioBuffer {
 	return a
 }
 
+func (a *AudioBuffer) SetAligned() {
+	a.mu.Lock()
+	a.aligned = true
+	a.mu.Unlock()
+}
+
 func (a *AudioBuffer) Push(c AudioChunk) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	for a.bytes+len(c.Data) > a.limit && a.aligned && !a.closed {
+		a.cond.Wait()
+	}
 	if a.closed {
 		return false
 	}
@@ -211,6 +221,7 @@ func (a *AudioBuffer) Pop() (AudioChunk, bool) {
 	c := a.items[0]
 	a.items = a.items[1:]
 	a.bytes -= len(c.Data)
+	a.cond.Broadcast()
 	return c, true
 }
 

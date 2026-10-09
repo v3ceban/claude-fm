@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -22,7 +24,20 @@ import (
 
 const streamURL = "https://clau.de/radio"
 
-const clearScreen = "\x1b[0m\x1b[2J"
+const (
+	clearScreen = "\x1b[0m\x1b[2J"
+	volumeStep  = 5
+	toastFor    = 1500 * time.Millisecond
+	liveHistory = 3600.0
+)
+
+type restart int
+
+const (
+	noRestart restart = iota
+	restartLive
+	restartGrow
+)
 
 type source struct{ w, h, quality int }
 
@@ -60,6 +75,18 @@ type app struct {
 	nextOut time.Time
 	sess    *pipeline.Session
 	late    float64
+
+	urls       []string
+	urlsAt     time.Time
+	proxy      *stream.Proxy
+	at         float64
+	paused     bool
+	pausedAt   time.Time
+	pausedFor  time.Duration
+	restart    restart
+	lastPNG    []byte
+	toastText  string
+	toastUntil time.Time
 }
 
 func main() {
@@ -108,6 +135,7 @@ func main() {
 	defer tty.EnableFocusEvents()()
 	a.panes = tty.WatchPane(200 * time.Millisecond)
 	defer a.panes.Stop()
+	defer a.closeProxy()
 	a.cols, a.rows = t.Size()
 	a.pane = a.panes.Get()
 	a.log.Printf("terminal %q, cell %dx%d px, pane %dx%d", a.gfx.Name, a.gfx.CellW, a.gfx.CellH, a.cols, a.rows)
@@ -158,11 +186,148 @@ func (a *app) write(s string) { os.Stdout.WriteString(s) }
 
 func (a *app) redraw() {
 	a.write(clearScreen)
-	a.cleared = false
+	a.cleared, a.shown = false, false
 	if a.status != "" {
 		x := max((a.cols-utf8.RuneCountInString(a.status))/2, 0)
 		a.write(fmt.Sprintf("\x1b[%d;%dH\x1b[0m%s", a.rows/2+1, x+1, a.status))
 	}
+	a.drawToast()
+}
+
+func (a *app) toast(text string) {
+	a.log.Printf("toast: %s", text)
+	a.toastText, a.toastUntil = text, time.Now().Add(toastFor)
+	a.drawToast()
+}
+
+func (a *app) drawToast() {
+	if a.toastText == "" || !a.pane.Visible {
+		os.Stdout.Write(tty.DeleteOverlay())
+		return
+	}
+	w1, h1 := render.LabelSize(a.toastText)
+	scale := max(min(a.imgRows*a.gfx.CellH/72, a.imgCols*a.gfx.CellW*9/10/max(w1, 1)), 1)
+	lw, lh := w1*scale, h1*scale
+	cols, rows := min((lw+a.gfx.CellW-1)/a.gfx.CellW, a.imgCols), min((lh+a.gfx.CellH-1)/a.gfx.CellH, a.imgRows)
+	png := render.LabelPNG(a.toastText, scale, cols*a.gfx.CellW, rows*a.gfx.CellH)
+	row := a.pane.Top + a.imgY + (a.imgRows-rows)/2 + 1
+	col := a.pane.Left + a.imgX + (a.imgCols-cols)/2 + 1
+	os.Stdout.Write(a.img.Overlay(row, col, cols, rows, png))
+}
+
+func (a *app) expireToast() {
+	if !a.toastUntil.IsZero() && time.Now().After(a.toastUntil) {
+		a.toastText, a.toastUntil = "", time.Time{}
+		a.drawToast()
+	}
+}
+
+func (a *app) onKey(k tty.Key) restart {
+	switch k {
+	case tty.KeyUp, tty.KeyDown:
+		if k == tty.KeyUp {
+			a.volume = min(a.volume+volumeStep, 130)
+		} else {
+			a.volume = max(a.volume-volumeStep, 0)
+		}
+		if a.sess != nil {
+			a.sess.SetVolume(a.volume)
+		}
+		a.toast(volumeText(a.volume))
+	case tty.KeyPause:
+		return a.togglePause()
+	case tty.KeyLive:
+		if a.input == "" && a.sess != nil && (a.paused || a.position() > 0) {
+			return a.goLive()
+		}
+		a.toast("● Live")
+	}
+	return noRestart
+}
+
+func (a *app) togglePause() restart {
+	if a.paused && a.input == "" && a.historyGone() {
+		return a.goLive()
+	}
+	a.paused = !a.paused
+	if a.sess != nil {
+		a.sess.SetPaused(a.paused)
+	}
+	switch {
+	case a.paused:
+		a.pausedAt = time.Now()
+		a.toastText, a.toastUntil = "⏸ Paused", time.Time{}
+		a.drawToast()
+	default:
+		a.pausedFor += time.Since(a.pausedAt)
+		if pos := a.position(); a.input == "" && pos >= 10 {
+			a.toast("▶ -" + clock(pos))
+		} else {
+			a.toast("▶ Playing")
+		}
+	}
+	return noRestart
+}
+
+func (a *app) goLive() restart {
+	a.paused, a.at = false, 0
+	a.toast("● Live")
+	return restartLive
+}
+
+func clock(sec float64) string {
+	s := int(math.Round(sec))
+	if s >= 3600 {
+		return fmt.Sprintf("%d:%02d:%02d", s/3600, s%3600/60, s%60)
+	}
+	return fmt.Sprintf("%d:%02d", s/60, s%60)
+}
+
+func (a *app) position() float64 {
+	if a.input != "" {
+		if a.sess != nil {
+			if clk, ok := a.sess.Clock(); ok {
+				return clk
+			}
+		}
+		return a.at
+	}
+	pos := a.at + a.pausedFor.Seconds()
+	if a.paused {
+		pos += time.Since(a.pausedAt).Seconds()
+	}
+	return pos
+}
+
+func (a *app) historyGone() bool {
+	if a.proxy == nil {
+		return time.Since(a.pausedAt) > 20*time.Second
+	}
+	return a.position() > a.proxy.Edge(0).HistorySeconds()-10
+}
+
+func (a *app) segments() []float64 {
+	if a.proxy == nil {
+		return nil
+	}
+	out := make([]float64, len(a.urls))
+	for i := range a.urls {
+		out[i] = a.proxy.Edge(i).SegmentSeconds
+	}
+	return out
+}
+
+func volumeText(v int) string {
+	waves := "✕"
+	switch {
+	case v > 100:
+		waves = ")))"
+	case v > 45:
+		waves = "))"
+	case v > 0:
+		waves = ")"
+	}
+	return fmt.Sprintf("🔊%s %d", waves, v)
 }
 
 func (a *app) message(msg string) {
@@ -175,6 +340,7 @@ func (a *app) clearOnce() {
 		a.cleared = true
 		a.status = ""
 		a.write(clearScreen)
+		a.drawToast()
 	}
 }
 
@@ -199,7 +365,7 @@ func (a *app) run() {
 	}
 	for !a.quit {
 		urls := []string{a.input}
-		if a.input == "" {
+		if a.input == "" && (a.urls == nil || time.Since(a.urlsAt) > time.Hour) {
 			a.message("Resolving Claude FM stream…")
 			u, err := a.resolve()
 			if a.quit {
@@ -221,11 +387,18 @@ func (a *app) run() {
 				}
 				continue
 			}
-			urls = u
+			a.urls, a.urlsAt = u, time.Now()
+			a.startProxy()
 		}
-		a.message("Connecting…")
-		sess, err := pipeline.Start(pipeline.Opts{URLs: urls, Local: a.input != "", SrcW: a.src.w, SrcH: a.src.h,
-			Volume: a.volume, Log: a.log})
+		if a.input == "" {
+			urls = a.urls
+		}
+		if a.restart == noRestart {
+			a.message("Connecting…")
+		}
+		a.restart = noRestart
+		sess, err := pipeline.Start(pipeline.Opts{URLs: urls, Local: a.input != "", Offset: a.at, Segments: a.segments(),
+			SrcW: a.src.w, SrcH: a.src.h, Volume: a.volume, Log: a.log})
 		if err != nil {
 			a.message(fmt.Sprintf("Failed to start pipeline: %v", shortErr(err)))
 			if a.wait(2 * time.Second) {
@@ -234,8 +407,16 @@ func (a *app) run() {
 			continue
 		}
 		start := time.Now()
-		a.sess = sess
-		restart := a.present(sess)
+		a.sess, a.pausedFor = sess, 0
+		if a.paused {
+			sess.SetPaused(true)
+			a.pausedAt = time.Now()
+		}
+		a.restart = a.present(sess)
+		if a.restart == restartGrow {
+			a.at = a.position()
+		}
+		a.sess = nil
 		sess.Stop()
 		debug.FreeOSMemory()
 		if a.quit {
@@ -244,15 +425,67 @@ func (a *app) run() {
 		if time.Since(start) > 30*time.Second {
 			backoff = time.Second
 		}
-		if !restart {
+		if a.restart == noRestart {
 			a.log.Printf("session ended: %v", sess.Err())
 			if a.input != "" {
 				return
 			}
+			a.urls, a.at = nil, 0
+			a.closeProxy()
 			if retry(fmt.Sprintf("Stream ended (%v). Reconnecting…", shortErr(sess.Err()))) {
 				return
 			}
 		}
+	}
+}
+
+func (a *app) startProxy() {
+	a.closeProxy()
+	p, err := stream.StartProxy(a.urls, liveHistory)
+	if err != nil {
+		a.log.Printf("proxy: %v", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ready := make(chan error, 1)
+	go func() { ready <- p.Wait(ctx) }()
+	for {
+		select {
+		case err := <-ready:
+			if err != nil {
+				a.log.Printf("proxy: %v", err)
+				p.Close()
+				return
+			}
+		case <-a.tty.Quit:
+			a.quit = true
+			p.Close()
+			return
+		case <-a.tty.Winch:
+			a.onResize()
+			a.growSource()
+			continue
+		case <-a.tty.Focus:
+			continue
+		case k := <-a.tty.Keys:
+			a.onKey(k)
+			continue
+		}
+		break
+	}
+	a.proxy = p
+	a.urls = p.URLs()
+	for i := range a.urls {
+		e := p.Edge(i)
+		a.log.Printf("proxy %d: segments %d..%d of %.1fs, extended %v", i, e.Oldest, e.Newest, e.SegmentSeconds, e.Extended)
+	}
+}
+
+func (a *app) closeProxy() {
+	if a.proxy != nil {
+		a.proxy.Close()
+		a.proxy = nil
 	}
 }
 
@@ -295,6 +528,8 @@ func (a *app) wait(d time.Duration) bool {
 			a.onResize()
 			a.growSource()
 		case <-a.tty.Focus:
+		case k := <-a.tty.Keys:
+			a.onKey(k)
 		}
 	}
 }
@@ -319,6 +554,9 @@ func (a *app) stop(screen, exit string) {
 }
 
 func (a *app) resolve() ([]string, error) {
+	if u := strings.Fields(os.Getenv("CLAUDE_FM_HLS")); len(u) > 0 {
+		return u, nil
+	}
 	if a.useCookies {
 		return a.resolveWith(a.cookies)
 	}
@@ -361,11 +599,13 @@ func (a *app) resolveWith(cookies string) ([]string, error) {
 			a.onResize()
 			a.growSource()
 		case <-a.tty.Focus:
+		case k := <-a.tty.Keys:
+			a.onKey(k)
 		}
 	}
 }
 
-func (a *app) present(s *pipeline.Session) bool {
+func (a *app) present(s *pipeline.Session) restart {
 	timer := time.NewTimer(50 * time.Millisecond)
 	defer timer.Stop()
 	shownFirst := false
@@ -373,17 +613,14 @@ func (a *app) present(s *pipeline.Session) bool {
 	for {
 		select {
 		case <-s.Done:
-			return false
+			return noRestart
 		case <-timer.C:
 		case <-s.Frames.Notify():
 		case <-a.tty.Focus:
-			a.pane = a.panes.Refresh()
-			if !a.pane.Visible {
-				a.hideImage()
-			}
+			a.panes.Refresh()
 		case <-a.tty.Quit:
 			a.quit = true
-			return false
+			return noRestart
 		case <-a.tty.Winch:
 			a.onResize()
 			if a.input == "" {
@@ -392,10 +629,22 @@ func (a *app) present(s *pipeline.Session) bool {
 		case <-grow:
 			grow = nil
 			if a.growSource() {
-				return true
+				return restartGrow
+			}
+		case k := <-a.tty.Keys:
+			if r := a.onKey(k); r != noRestart {
+				return r
 			}
 		}
 
+		a.expireToast()
+		a.pane = a.panes.Get()
+		if !a.pane.Visible {
+			a.hideImage()
+		} else if !a.shown && a.lastPNG != nil {
+			a.drawPNG(a.lastPNG)
+			a.drawToast()
+		}
 		clk, ok := s.Clock()
 		if !ok {
 			if !shownFirst {
@@ -420,7 +669,7 @@ func (a *app) present(s *pipeline.Session) bool {
 			s.Frames.Put(f.Buf)
 		}
 		if a.quit {
-			return false
+			return noRestart
 		}
 		d := 20 * time.Millisecond
 		if hasNext {
@@ -431,19 +680,23 @@ func (a *app) present(s *pipeline.Session) bool {
 	}
 }
 
-func (a *app) draw(f *pipeline.Frame) {
-	t := time.Now()
-	a.pane = a.panes.Get()
-	if !a.pane.Visible {
-		a.hideImage()
-		return
-	}
+func (a *app) drawPNG(png []byte) []byte {
 	a.clearOnce()
 	a.shown = true
-	b := a.img.Frame(a.pane.Top+a.imgY+1, a.pane.Left+a.imgX+1, a.imgCols, a.imgRows, a.png.Encode(f.Buf))
+	b := a.img.Frame(a.pane.Top+a.imgY+1, a.pane.Left+a.imgX+1, a.imgCols, a.imgRows, png)
 	if _, err := os.Stdout.Write(b); err != nil {
 		a.quit = true
 	}
+	return b
+}
+
+func (a *app) draw(f *pipeline.Frame) {
+	t := time.Now()
+	if !a.pane.Visible {
+		return
+	}
+	a.lastPNG = a.png.Encode(f.Buf)
+	b := a.drawPNG(a.lastPNG)
 	a.frames++
 	a.nextOut = a.nextOut.Add(time.Duration(float64(time.Second) / max(a.fps, 1)))
 	if a.nextOut.Before(t) {

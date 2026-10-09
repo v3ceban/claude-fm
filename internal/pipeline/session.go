@@ -18,6 +18,8 @@ import (
 type Opts struct {
 	URLs       []string
 	Local      bool
+	Offset     float64
+	Segments   []float64
 	SrcW, SrcH int
 	AO         string
 	Volume     int
@@ -75,11 +77,33 @@ const (
 
 func FrameBytes(w, h int) int { return w * h * 3 / 2 }
 
-func (s *Session) inputArgs(u string) []string {
+const LiveLag = 3
+
+func (s *Session) inputArgs(i int) []string {
+	u := s.opts.URLs[min(i, len(s.opts.URLs)-1)]
+	var args []string
 	if s.opts.Local {
-		return []string{"-re", "-i", u}
+		args = []string{"-re"}
+		if s.opts.Offset > 0 {
+			args = append(args, "-ss", fmt.Sprintf("%.3f", s.opts.Offset))
+		}
+	} else {
+		args = []string{"-rw_timeout", "8000000"}
+		if n := len(s.opts.Segments); n > 0 && s.opts.Offset > 0 {
+			back := LiveLag + int(math.Round(s.opts.Offset/s.opts.Segments[min(i, n-1)]))
+			args = append(args, "-live_start_index", strconv.Itoa(-back))
+		}
 	}
-	return []string{"-rw_timeout", "8000000", "-i", u}
+	return append(args, "-i", u)
+}
+
+func (s *Session) SetVolume(v int) { s.mpv.Set("volume", v) }
+
+func (s *Session) SetPaused(p bool) {
+	s.mu.Lock()
+	s.paused = p
+	s.mu.Unlock()
+	s.mpv.Set("pause", p)
 }
 
 func (s *Session) spawn(args []string) (*exec.Cmd, io.ReadCloser, io.ReadCloser, error) {
@@ -136,7 +160,7 @@ func Start(o Opts) (*Session, error) {
 	}
 	s.mpv = m
 	vf := fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease:flags=area,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,showinfo=checksum=0", o.SrcW, o.SrcH, o.SrcW, o.SrcH)
-	vargs := append(s.inputArgs(o.URLs[0]), "-map", "0:v:0", "-vf", vf,
+	vargs := append(s.inputArgs(0), "-map", "0:v:0", "-vf", vf,
 		"-fps_mode", "passthrough", "-pix_fmt", "yuv420p", "-f", "rawvideo", "pipe:1")
 	vcmd, vout, verr, err := s.spawn(vargs)
 	if err != nil {
@@ -146,7 +170,7 @@ func Start(o Opts) (*Session, error) {
 	parseV := func() { s.parseStderr(verr, s.vring) }
 	s.supervise(vcmd, func() {}, parseV, func() { s.readVideo(vout) })
 	af := fmt.Sprintf("aresample=%d,asetnsamples=%d,ashowinfo", SampleRate, audioChunk)
-	aargs := append(s.inputArgs(o.URLs[len(o.URLs)-1]), "-map", "0:a:0", "-af", af, "-ac", "2", "-f", "s16le", "pipe:1")
+	aargs := append(s.inputArgs(1), "-map", "0:a:0", "-af", af, "-ac", "2", "-f", "s16le", "pipe:1")
 	acmd, aout, aerr, err := s.spawn(aargs)
 	if err != nil {
 		s.Stop()
@@ -321,6 +345,7 @@ func (s *Session) maybeAlign() {
 	s.mu.Unlock()
 	s.opts.Log.Printf("aligned at t0=%.3f (video %.3f audio %.3f)", t0, s.firstV, s.firstA)
 	s.Frames.SetAligned(t0)
+	s.audio.SetAligned()
 	close(s.alignedCh)
 }
 
@@ -436,6 +461,11 @@ func (s *Session) stalled(now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.aligned || now.Sub(s.alignedAt) < stallGrace {
+		return nil
+	}
+	if s.paused {
+		s.lastAdvance, s.lastV, s.lastA = now, now, now
+		s.aheadSince = time.Time{}
 		return nil
 	}
 	if ok && clk > s.lastClock+0.1 {

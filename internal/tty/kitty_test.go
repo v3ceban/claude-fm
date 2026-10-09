@@ -31,6 +31,22 @@ func TestImageWriterFrames(t *testing.T) {
 	}
 }
 
+func TestImageWriterOverlay(t *testing.T) {
+	noTmux(t)
+	var w ImageWriter
+	got := string(w.Overlay(4, 6, 20, 3, []byte("x")))
+	want := "\x1b7\x1b[4;6H\x1b_Ga=d,d=I,i=3,q=2\x1b\\\x1b_Ga=T,f=100,i=3,q=2,c=20,r=3,z=1,m=0;eA==\x1b\\\x1b8"
+	if got != want {
+		t.Fatalf("overlay\n got %q\nwant %q", got, want)
+	}
+	if string(DeleteOverlay()) != "\x1b_Ga=d,d=I,i=3,q=2\x1b\\" {
+		t.Fatalf("delete overlay = %q", DeleteOverlay())
+	}
+	if !strings.HasPrefix(string(w.Frame(1, 1, 1, 1, []byte("x"))), "\x1b7\x1b[?2026h\x1b[1;1H\x1b_Ga=T,f=100,i=1") {
+		t.Fatal("frames must keep using ids 1 and 2")
+	}
+}
+
 func TestImageWriterChunks(t *testing.T) {
 	noTmux(t)
 	var w ImageWriter

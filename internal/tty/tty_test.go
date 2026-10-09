@@ -1,16 +1,19 @@
 package tty
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
-func TestIsQuit(t *testing.T) {
-	for _, in := range []string{"q", "Q", "\x03", "\x04", "\x1b", "xq"} {
-		if !IsQuit([]byte(in)) {
-			t.Errorf("IsQuit(%q) = false", in)
-		}
+func TestParseKeys(t *testing.T) {
+	cases := map[string][]Key{
+		"q": {KeyQuit}, "Q": {KeyQuit}, "\x03": {KeyQuit}, "\x04": {KeyQuit}, "\x1b": {KeyQuit}, "xq": {KeyQuit},
+		" ": {KeyPause}, "p": {KeyPause}, "l": {KeyLive}, "\x1b[A": {KeyUp}, "\x1bOB": {KeyDown}, "\x1b[C\x1b[D": nil,
+		"\x1b[O": nil, "\x1b[1;5A": nil, "x": nil, "": nil, "\x1b[Aq": {KeyUp, KeyQuit},
 	}
-	for _, in := range []string{"x", " ", "\x1b[A", ""} {
-		if IsQuit([]byte(in)) {
-			t.Errorf("IsQuit(%q) = true", in)
+	for in, want := range cases {
+		if got := parseKeys([]byte(in)); !slices.Equal(got, want) {
+			t.Errorf("parseKeys(%q) = %v, want %v", in, got, want)
 		}
 	}
 }
@@ -19,9 +22,6 @@ func TestFocusEvents(t *testing.T) {
 	ev := focusEvents([]byte("\x1b[Ox\x1b[I"))
 	if len(ev) != 2 || ev[0] || !ev[1] {
 		t.Fatalf("focus events = %v", ev)
-	}
-	if IsQuit([]byte("\x1b[O")) {
-		t.Fatal("focus event must not quit")
 	}
 }
 
