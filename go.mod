@@ -1,6 +1,6 @@
 module github.com/v3ceban/claude-fm
 
-go 1.27
+go 1.26.0
 
 require (
 	golang.org/x/sys v0.48.0
